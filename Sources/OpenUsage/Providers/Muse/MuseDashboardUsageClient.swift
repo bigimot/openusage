@@ -35,7 +35,12 @@ final class MuseDashboardUsageClient {
     func fetchUsage(cookies: [MuseDashboardCookie]) async throws -> String {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        // `innerText` depends on layout. A zero-sized, unattached view loads the document but
+        // exposes an empty rendered body, so give the off-screen renderer a stable viewport.
+        let webView = WKWebView(
+            frame: CGRect(x: 0, y: 0, width: 1_024, height: 768),
+            configuration: configuration
+        )
         let cookieStore = configuration.websiteDataStore.httpCookieStore
 
         for stored in cookies {
@@ -49,10 +54,12 @@ final class MuseDashboardUsageClient {
         request.timeoutInterval = 15
         webView.load(request)
 
+        var lastRenderedText = ""
         var lastUsageText: String?
         for _ in 0..<attempts {
             try Task.checkCancellation()
             if let text = try? await renderedText(in: webView) {
+                lastRenderedText = text
                 let lowercased = text.lowercased()
                 if lowercased.contains("current usage") || lowercased.contains("weekly limit") {
                     lastUsageText = text
@@ -65,6 +72,18 @@ final class MuseDashboardUsageClient {
         }
 
         if let lastUsageText { return lastUsageText }
+        let lowercased = lastRenderedText.lowercased()
+        let host = webView.url?.host ?? "none"
+        let path = webView.url?.path ?? "none"
+        AppLog.warn(
+            LogTag.plugin("muse"),
+            "dashboard page missing quota labels "
+                + "(host=\(host), path=\(path), body=\(!lastRenderedText.isEmpty), "
+                + "login=\(lowercased.contains("login") || lowercased.contains("log in") || lowercased.contains("sign in")), "
+                + "usage=\(lowercased.contains("usage")), current=\(lowercased.contains("current")), "
+                + "weekly=\(lowercased.contains("weekly")), browser=\(lowercased.contains("browser")), "
+                + "genericError=\(lowercased.contains("something went wrong")))"
+        )
         if webView.isLoading { throw MuseDashboardUsageError.timeout }
         throw MuseDashboardUsageError.invalidPage
     }
