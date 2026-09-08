@@ -4,14 +4,10 @@ import XCTest
 @MainActor
 final class ProviderMarksTests: XCTestCase {
     func testProviderVectorMarksLoadWithoutFallbacks() throws {
-        for id in ["claude", "codex", "cursor", "devin", "grok"] {
+        for id in ["claude", "codex", "cursor", "devin", "grok", "muse"] {
             let mark = try XCTUnwrap(ProviderMarks.mark(for: id), "\(id) should load a vector mark")
             XCTAssertFalse(mark.path.isEmpty, "\(id) mark must carry SVG path data")
         }
     }
 
-    func testMuseUsesItsSparklesSymbolFallback() {
-        XCTAssertNil(ProviderMarks.mark(for: "muse"))
-        XCTAssertEqual(ProviderMarks.symbolFallback(for: "muse"), "sparkles")
-    }
 }
