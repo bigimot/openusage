@@ -1,26 +1,43 @@
 # Muse Code
 
-Tracks your Muse Code usage from the session logs already on your Mac — per-day spend
-tiles and a usage trend. Muse Code publishes no quota or spend API, so there are no
-session/weekly meters: what you see is measured local activity, with dollars estimated
-from Meta's published Muse Spark rates.
+Shows your Muse Code session and weekly quotas alongside usage from the session logs already
+on your Mac. The quota meters come from Meta's authenticated usage dashboard; the per-day
+spend tiles and trend remain measured local activity, with dollars estimated from Meta's
+published Muse Spark rates.
 
 ## What it tracks
 
 | Metric | Meaning |
 |---|---|
+| Session | Percentage of the current Muse session allowance used, with its reset time |
+| Weekly | Percentage of the weekly Muse allowance used, with its reset time |
 | Today / Yesterday / Last 30 Days | Local cost and tokens from your Muse sessions |
 | Usage Trend | A day-by-day sparkline of tokens over the last month |
 
 There is no plan badge: with no account API, OpenUsage can't tell which Muse plan you're on.
 
-## Where credentials come from
+## Where quota access comes from
+
+OpenUsage reuses the browser session at `~/.config/muse/meta_session.json` that Meta Muse Bar
+created. It imports only unexpired `dev.meta.ai` cookies into a private, non-persistent WebKit
+view, opens `https://dev.meta.ai/usage`, and reads the rendered **Current usage** and **Weekly
+limit** values. Cookie values never appear in OpenUsage logs or leave WebKit's private session.
+
+This is an unofficial integration with Meta's private authenticated web dashboard, not a public
+or supported quota API. OpenUsage deliberately does not copy Meta's changing private GraphQL
+request identifiers, CSRF fields, or account fields.
+
+If the saved dashboard session is missing, expired, unreadable, or Meta changes the page,
+OpenUsage shows **“Muse quota is unavailable. Sign in through Meta Muse Bar and refresh.”** The
+local Usage Trend and spend rows still refresh normally.
+
+## Where local usage comes from
 
 Use Muse Code as usual. OpenUsage never asks for a key: it counts a provider as present
 when `META_API_KEY` is exported, when `~/.config/muse/auth.json` exists (written by
 `muse login` or `muse auth set`), or when Muse session logs exist on disk. The credential
-itself is never read for content and never leaves your Mac — spend comes from the logs,
-not from any account.
+itself is never read for content and never leaves your Mac — spend comes from the logs, not
+from the dashboard or any account API.
 
 ## The spend tiles
 
@@ -41,6 +58,8 @@ mirrored in the parent session's log, so counting both would double-count delega
 
 - **"Muse Code not detected"** — no credential and no session logs were found. Run
   `muse login` and complete at least one Muse session, then refresh.
+- **"Muse quota is unavailable"** — open Meta Muse Bar to renew its dashboard session, then
+  refresh OpenUsage. Your locally scanned trend and spend rows remain available.
 - **"Couldn't read Muse Code's auth.json"** — the file exists but is unreadable. Check
   its permissions, or run `muse login` again to rewrite it.
 - **Spend tiles show "No data"** — OpenUsage needs session logs at
@@ -61,3 +80,7 @@ Spend tiles and trend: `model_completed` usage priced through the shared engine,
 Muse Spark entries in the pricing supplement (synced hourly to installed apps, no release
 needed). The scan is machine-local, so tiles from two Macs sync by sum like the other
 local scanners.
+
+Quota meters: rendered text from `https://dev.meta.ai/usage`, loaded with the local Meta Muse Bar
+storage state in a non-persistent WebKit data store. Quotas and reset times describe this Mac's
+current dashboard session and are not combined through iCloud Sync.
