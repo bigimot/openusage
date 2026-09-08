@@ -2,7 +2,7 @@ import XCTest
 @testable import OpenUsage
 
 final class MuseDashboardSessionStoreTests: XCTestCase {
-    private let home = URL(fileURLWithPath: "/Users/tester")
+    private let home = URL(fileURLWithPath: "/tmp/openusage-tests")
     private let now = Date(timeIntervalSince1970: 1_788_710_400)
 
     func testAbsentStorageStateHasTypedError() {

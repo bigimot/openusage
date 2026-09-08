@@ -83,7 +83,7 @@ final class MuseProviderTests: XCTestCase {
         localScan: LogUsageScan? = nil,
         dashboardError: MuseDashboardUsageError? = nil
     ) -> MuseProvider {
-        let home = URL(fileURLWithPath: "/Users/tester")
+        let home = URL(fileURLWithPath: "/tmp/openusage-tests")
         let sessionPath = home.appendingPathComponent(".config/muse/meta_session.json").path
         let sessionJSON = """
         {"cookies":[{"name":"session","value":"safe-fixture","domain":".meta.ai","path":"/",\
