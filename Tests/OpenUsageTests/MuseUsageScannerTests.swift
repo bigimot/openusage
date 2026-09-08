@@ -276,6 +276,10 @@ final class MuseProviderRefreshTests: XCTestCase {
             usageScanner: MuseUsageScanner(
                 environment: environment, homeDirectory: { home },
                 incrementalScanner: IncrementalJSONLScanner()),
+            dashboardSessionStore: MuseDashboardSessionStore(
+                files: FakeFiles(files), environment: environment,
+                homeDirectory: { home }
+            ),
             now: { now },
             pricing: { pricing }
         )
@@ -350,7 +354,11 @@ final class MuseProviderRefreshTests: XCTestCase {
             usageScanner: MuseUsageScanner(
                 environment: FakeEnvironment([:]),
                 homeDirectory: { URL(fileURLWithPath: "/nonexistent") },
-                incrementalScanner: IncrementalJSONLScanner())
+                incrementalScanner: IncrementalJSONLScanner()),
+            dashboardSessionStore: MuseDashboardSessionStore(
+                files: FakeFiles(), environment: FakeEnvironment([:]),
+                homeDirectory: { URL(fileURLWithPath: "/nonexistent") }
+            )
         )
         let hasCredentials = await provider.hasLocalCredentials()
         XCTAssertFalse(hasCredentials)

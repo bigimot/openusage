@@ -1,9 +1,8 @@
 import Foundation
 
-/// Tracks Muse Code usage from the CLI's session logs already on this Mac: per-day spend tiles
-/// and a usage trend. Muse Code publishes no quota or spend API, so there is deliberately no
-/// usage client — the local scan is the whole provider — and no quota meters, only the
-/// trend and the Today / Yesterday / Last 30 Days tiles every local-scanner provider ships.
+/// Combines account-wide Muse quotas from Meta's authenticated web dashboard with the CLI session
+/// logs already on this Mac. Dashboard lookup is best-effort: local trend/spend stays available and
+/// carries a neutral warning whenever the unofficial dashboard source cannot be read.
 ///
 /// No quick links: the provider ships none rather than guessing at Status / Dashboard URLs.
 @MainActor
@@ -16,8 +15,11 @@ final class MuseProvider: ProviderRuntime {
 
     let authStore: MuseAuthStore
     let usageScanner: MuseUsageScanner
+    let dashboardSessionStore: MuseDashboardSessionStore
     let now: @Sendable () -> Date
     let pricing: @Sendable () async -> ModelPricing
+    private let dashboardUsage: @MainActor ([MuseDashboardCookie]) async throws -> String
+    private let localUsage: @Sendable (Date, ModelPricing) async -> LogUsageScan?
 
     /// Names the local source on hover. Dollars are estimated from Meta's published Muse Spark
     /// rates (not measured), so the estimate marker applies — unlike OpenCode's carried costs.
@@ -27,20 +29,38 @@ final class MuseProvider: ProviderRuntime {
     /// run, not once per 5-minute refresh.
     private var loggedAuthReadFailure = false
 
+    static let quotaUnavailableWarning = "Muse quota is unavailable. Sign in through Meta Muse Bar and refresh."
+
     init(
         authStore: MuseAuthStore = MuseAuthStore(),
         usageScanner: MuseUsageScanner = MuseUsageScanner(),
+        dashboardSessionStore: MuseDashboardSessionStore = MuseDashboardSessionStore(),
+        dashboardUsageClient: MuseDashboardUsageClient = MuseDashboardUsageClient(),
+        dashboardUsage: (@MainActor ([MuseDashboardCookie]) async throws -> String)? = nil,
+        localUsage: (@Sendable (Date, ModelPricing) async -> LogUsageScan?)? = nil,
         now: @escaping @Sendable () -> Date = Date.init,
         pricing: @escaping @Sendable () async -> ModelPricing = { await ModelPricingStore.shared.current() }
     ) {
         self.authStore = authStore
         self.usageScanner = usageScanner
+        self.dashboardSessionStore = dashboardSessionStore
+        self.dashboardUsage = dashboardUsage ?? { [dashboardUsageClient] cookies in
+            try await dashboardUsageClient.fetchUsage(cookies: cookies)
+        }
+        self.localUsage = localUsage ?? { [usageScanner] now, pricing in
+            await usageScanner.scan(now: now, pricing: pricing)
+        }
         self.now = now
         self.pricing = pricing
     }
 
     var widgetDescriptors: [WidgetDescriptor] {
         [
+            .percent(id: "muse.session", provider: provider, title: "Session",
+                     sessionStartSignal: .missingResetDate)
+                .exportingLimit("session", unit: "percent"),
+            .percent(id: "muse.weekly", provider: provider, title: "Weekly")
+                .exportingLimit("weekly", unit: "percent"),
             .usageTrend(provider: provider)
                 .exportingHistory(
                     scope: .machineLocal,
@@ -51,9 +71,19 @@ final class MuseProvider: ProviderRuntime {
     }
 
     func hasLocalCredentials() async -> Bool {
-        // Same sources as `refresh()`: an exported `META_API_KEY`, the local `auth.json`, or any
-        // Muse session log already on disk. Local-only, off the main actor. Unreadable storage is
-        // itself a Muse footprint — enable the provider so `refresh()` can surface the error.
+        // Same sources as `refresh()`: the dashboard session, an exported `META_API_KEY`, the local
+        // `auth.json`, or any Muse session log. Broken/expired state is still a local Muse footprint,
+        // so the enabled provider can explain the problem instead of disappearing.
+        do {
+            _ = try await loadOffMainActor { [dashboardSessionStore] in
+                try dashboardSessionStore.cookies()
+            }
+            return true
+        } catch MuseDashboardSessionError.absent {
+            // Continue through the CLI sources below.
+        } catch {
+            return true
+        }
         do {
             if try await loadOffMainActor({ [authStore] in try authStore.credential() }) != nil {
                 return true
@@ -68,6 +98,29 @@ final class MuseProvider: ProviderRuntime {
         // One clock for the whole refresh, so the scan cutoff, tiles, trend, and snapshot timestamp
         // can't straddle a midnight boundary.
         let refreshedAt = now()
+
+        var quotaLines: [MetricLine] = []
+        var quotaWarning: String?
+        var dashboardSessionExists = false
+        do {
+            let cookies = try await loadOffMainActor { [dashboardSessionStore] in
+                try dashboardSessionStore.cookies()
+            }
+            dashboardSessionExists = true
+            let pageText = try await dashboardUsage(cookies)
+            quotaLines = try MuseUsageMapper.lines(from: pageText, now: refreshedAt)
+            if quotaLines.count != 2 { quotaWarning = Self.quotaUnavailableWarning }
+        } catch let error as MuseDashboardSessionError {
+            dashboardSessionExists = error != .absent
+            quotaWarning = Self.quotaUnavailableWarning
+            AppLog.warn(LogTag.plugin("muse"), "dashboard quota unavailable (\(error.diagnosticCode))")
+        } catch let error as MuseDashboardUsageError {
+            quotaWarning = Self.quotaUnavailableWarning
+            AppLog.warn(LogTag.plugin("muse"), "dashboard quota unavailable (\(error.diagnosticCode))")
+        } catch {
+            quotaWarning = Self.quotaUnavailableWarning
+            AppLog.warn(LogTag.plugin("muse"), "dashboard quota unavailable (unexpected)")
+        }
 
         var credential: MuseCredential?
         var authReadError: MuseUsageError?
@@ -84,9 +137,9 @@ final class MuseProvider: ProviderRuntime {
             authReadError = .credentialsUnreadable(detail: error.localizedDescription)
         }
 
-        let scan = await usageScanner.scan(now: refreshedAt, pricing: await pricing())
+        let scan = await localUsage(refreshedAt, await pricing())
 
-        var lines: [MetricLine] = []
+        var lines = quotaLines
         if let scan {
             SpendTileMapper.appendTokenUsage(
                 scan.series, to: &lines, now: refreshedAt,
@@ -101,6 +154,8 @@ final class MuseProvider: ProviderRuntime {
         if lines.isEmpty {
             if credential != nil {
                 // Logged in but nothing in the window: honest "No data", not an error.
+                MetricLine.appendNoDataIfNeeded(&lines)
+            } else if dashboardSessionExists {
                 MetricLine.appendNoDataIfNeeded(&lines)
             } else {
                 return ProviderSnapshot.error(
@@ -120,7 +175,28 @@ final class MuseProvider: ProviderRuntime {
                     modelUsage: $0.modelUsage,
                     unknownModelsByDay: $0.unknownModelsByDay
                 )
-            }
+            },
+            warning: quotaWarning
         )
+    }
+}
+
+private extension MuseDashboardSessionError {
+    var diagnosticCode: String {
+        switch self {
+        case .absent: "session-absent"
+        case .expired: "session-expired"
+        case .unreadable: "session-unreadable"
+        }
+    }
+}
+
+private extension MuseDashboardUsageError {
+    var diagnosticCode: String {
+        switch self {
+        case .invalidCookie: "invalid-cookie"
+        case .invalidPage: "invalid-page"
+        case .timeout: "timeout"
+        }
     }
 }

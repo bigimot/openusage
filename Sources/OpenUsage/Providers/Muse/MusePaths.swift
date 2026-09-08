@@ -27,6 +27,11 @@ enum MusePaths {
         return configDirectory(environment: environment, homeDirectory: homeDirectory) + "/auth.json"
     }
 
+    /// Playwright storage state written by Meta Muse Bar for the authenticated usage dashboard.
+    static func dashboardSessionPath(environment: EnvironmentReading, homeDirectory: URL) -> String {
+        configDirectory(environment: environment, homeDirectory: homeDirectory) + "/meta_session.json"
+    }
+
     static func dataDirectory(environment: EnvironmentReading, homeDirectory: URL) -> String {
         if let xdg = environment.value(for: "XDG_DATA_HOME")?
             .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty {
