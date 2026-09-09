@@ -59,6 +59,25 @@ final class MuseProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.warning, "Muse quota is unavailable. Sign in through Meta Muse Bar and refresh.")
     }
 
+    func testHubQuotasBypassDashboardAndPreserveLocalSpend() async {
+        let http = FakeHTTPClient(response: HTTPResponse(statusCode: 200, headers: [:], body: Data("{\"providers\":{\"muse\":{\"status\":\"ok\",\"fetched_at\":\"\(ISO8601DateFormatter().string(from: now))\",\"session_percent\":0,\"weekly_percent\":37}}}".utf8)))
+        let provider = makeProvider(localScan: localScan(), hubHTTP: http)
+        let snapshot = await provider.refresh()
+        XCTAssertEqual(Array(snapshot.lines.prefix(2)).map(\.label), ["Session", "Weekly"])
+        XCTAssertTrue(snapshot.lines.contains { $0.label == "Today" })
+        XCTAssertNil(snapshot.warning)
+        XCTAssertEqual(http.requests.count, 1)
+    }
+
+    func testHubFailureDoesNotFallBackToDashboardOrLoseSpend() async {
+        let http = FakeHTTPClient(response: HTTPResponse(statusCode: 503, headers: [:], body: Data()))
+        let provider = makeProvider(localScan: localScan(), hubHTTP: http)
+        let snapshot = await provider.refresh()
+        XCTAssertFalse(snapshot.lines.contains { $0.label == "Session" || $0.label == "Weekly" })
+        XCTAssertTrue(snapshot.lines.contains { $0.label == "Today" })
+        XCTAssertEqual(snapshot.warning, SharedLimitsHubError.http(503).localizedDescription)
+    }
+
     func testDefaultLayoutEnablesPinsAndKeepsQuotaAndTrendAlwaysVisible() {
         let alwaysVisible = ["muse.session", "muse.weekly", "muse.trend"]
         let spend = ["muse.today", "muse.yesterday", "muse.last30"]
@@ -81,7 +100,8 @@ final class MuseProviderTests: XCTestCase {
     private func makeProvider(
         dashboardText: String? = nil,
         localScan: LogUsageScan? = nil,
-        dashboardError: MuseDashboardUsageError? = nil
+        dashboardError: MuseDashboardUsageError? = nil,
+        hubHTTP: FakeHTTPClient? = nil
     ) -> MuseProvider {
         let home = URL(fileURLWithPath: "/tmp/openusage-tests")
         let sessionPath = home.appendingPathComponent(".config/muse/meta_session.json").path
@@ -100,9 +120,14 @@ final class MuseProviderTests: XCTestCase {
                 now: { [now] in now }, homeDirectory: { home }
             ),
             dashboardUsage: { _ in
+                if hubHTTP != nil { XCTFail("Configured hub must bypass the dashboard") }
                 if let dashboardError { throw dashboardError }
                 return dashboardText ?? "Current usage 8%\nWeekly limit 29%"
             },
+            hubConfiguration: {
+                hubHTTP.map { _ in SharedLimitsHubConfiguration(snapshotURL: URL(string: "https://hub.example/snapshot.json")!, providers: ["muse"]) }
+            },
+            hubClient: SharedLimitsHubClient(http: hubHTTP ?? FakeHTTPClient(response: HTTPResponse(statusCode: 500, headers: [:], body: Data()))),
             localUsage: { _, _ in localScan },
             now: { [now] in now },
             pricing: { ModelPricing(supplement: PricingSupplement(), primary: PricingCatalog(entries: [:]), secondary: PricingCatalog(entries: [:])) }

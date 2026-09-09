@@ -1,6 +1,6 @@
 import Foundation
 
-/// Combines account-wide Muse quotas from Meta's authenticated web dashboard with the CLI session
+/// Combines account-wide Muse quotas from the configured shared hub (or local dashboard) with CLI session
 /// logs already on this Mac. Dashboard lookup is best-effort: local trend/spend stays available and
 /// carries a neutral warning whenever the unofficial dashboard source cannot be read.
 ///
@@ -19,6 +19,8 @@ final class MuseProvider: ProviderRuntime {
     let now: @Sendable () -> Date
     let pricing: @Sendable () async -> ModelPricing
     private let dashboardUsage: @MainActor ([MuseDashboardCookie]) async throws -> String
+    private let hubConfiguration: @Sendable () throws -> SharedLimitsHubConfiguration?
+    private let hubClient: SharedLimitsHubClient
     private let localUsage: @Sendable (Date, ModelPricing) async -> LogUsageScan?
 
     /// Names the local source on hover. Dollars are estimated from Meta's published Muse Spark
@@ -37,10 +39,16 @@ final class MuseProvider: ProviderRuntime {
         dashboardSessionStore: MuseDashboardSessionStore = MuseDashboardSessionStore(),
         dashboardUsageClient: MuseDashboardUsageClient = MuseDashboardUsageClient(),
         dashboardUsage: (@MainActor ([MuseDashboardCookie]) async throws -> String)? = nil,
+        hubConfiguration: @escaping @Sendable () throws -> SharedLimitsHubConfiguration? = {
+            try SharedLimitsHubConfiguration.load(providerID: "muse")
+        },
+        hubClient: SharedLimitsHubClient = SharedLimitsHubClient(),
         localUsage: (@Sendable (Date, ModelPricing) async -> LogUsageScan?)? = nil,
         now: @escaping @Sendable () -> Date = Date.init,
         pricing: @escaping @Sendable () async -> ModelPricing = { await ModelPricingStore.shared.current() }
     ) {
+        self.hubConfiguration = hubConfiguration
+        self.hubClient = hubClient
         self.authStore = authStore
         self.usageScanner = usageScanner
         self.dashboardSessionStore = dashboardSessionStore
@@ -71,6 +79,9 @@ final class MuseProvider: ProviderRuntime {
     }
 
     func hasLocalCredentials() async -> Bool {
+        do {
+            if try await loadOffMainActor(hubConfiguration) != nil { return true }
+        } catch { return true } // Configured but broken: keep the provider visible to explain the error.
         // Same sources as `refresh()`: the dashboard session, an exported `META_API_KEY`, the local
         // `auth.json`, or any Muse session log. Broken/expired state is still a local Muse footprint,
         // so the enabled provider can explain the problem instead of disappearing.
@@ -102,14 +113,27 @@ final class MuseProvider: ProviderRuntime {
         var quotaLines: [MetricLine] = []
         var quotaWarning: String?
         var dashboardSessionExists = false
+        var quotaFetchedAt: Date?
         do {
-            let cookies = try await loadOffMainActor { [dashboardSessionStore] in
-                try dashboardSessionStore.cookies()
+            if let config = try await loadOffMainActor(hubConfiguration) {
+                dashboardSessionExists = true
+                let quota = try await hubClient.fetch(providerID: "muse", configuration: config, now: refreshedAt)
+                quotaLines = quota.lines
+                quotaFetchedAt = quota.fetchedAt
+                if quotaLines.count != 2 { quotaWarning = SharedLimitsHubError.noData.localizedDescription }
+            } else {
+                let cookies = try await loadOffMainActor { [dashboardSessionStore] in
+                    try dashboardSessionStore.cookies()
+                }
+                dashboardSessionExists = true
+                let pageText = try await dashboardUsage(cookies)
+                quotaLines = try MuseUsageMapper.lines(from: pageText, now: refreshedAt)
+                if quotaLines.count != 2 { quotaWarning = Self.quotaUnavailableWarning }
             }
+        } catch let error as SharedLimitsHubError {
             dashboardSessionExists = true
-            let pageText = try await dashboardUsage(cookies)
-            quotaLines = try MuseUsageMapper.lines(from: pageText, now: refreshedAt)
-            if quotaLines.count != 2 { quotaWarning = Self.quotaUnavailableWarning }
+            quotaWarning = error.localizedDescription
+            AppLog.warn(LogTag.plugin("muse"), "shared hub quota unavailable: \(error.localizedDescription)")
         } catch let error as MuseDashboardSessionError {
             dashboardSessionExists = error != .absent
             quotaWarning = Self.quotaUnavailableWarning
@@ -168,7 +192,7 @@ final class MuseProvider: ProviderRuntime {
             provider: provider,
             plan: nil,
             lines: lines,
-            refreshedAt: refreshedAt,
+            refreshedAt: quotaFetchedAt ?? refreshedAt,
             usageHistory: scan.map {
                 ProviderUsageHistory(
                     series: $0.series,

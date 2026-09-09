@@ -280,6 +280,7 @@ final class MuseProviderRefreshTests: XCTestCase {
                 files: FakeFiles(files), environment: environment,
                 homeDirectory: { home }
             ),
+            hubConfiguration: { nil },
             now: { now },
             pricing: { pricing }
         )
@@ -358,7 +359,8 @@ final class MuseProviderRefreshTests: XCTestCase {
             dashboardSessionStore: MuseDashboardSessionStore(
                 files: FakeFiles(), environment: FakeEnvironment([:]),
                 homeDirectory: { URL(fileURLWithPath: "/nonexistent") }
-            )
+            ),
+            hubConfiguration: { nil }
         )
         let hasCredentials = await provider.hasLocalCredentials()
         XCTAssertFalse(hasCredentials)

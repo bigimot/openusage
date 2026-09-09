@@ -1,7 +1,7 @@
 # Muse Code
 
 Shows your Muse Code session and weekly quotas alongside usage from the session logs already
-on your Mac. The quota meters come from Meta's authenticated usage dashboard; the per-day
+on your Mac. The quota meters come from your configured shared limits hub, or from Meta's authenticated usage dashboard when no hub is configured; the per-day
 spend tiles and trend remain measured local activity, with dollars estimated from Meta's
 published Muse Spark rates.
 
@@ -16,7 +16,32 @@ published Muse Spark rates.
 
 There is no plan badge: with no account API, OpenUsage can't tell which Muse plan you're on.
 
-## Where quota access comes from
+## Shared limits hub (optional)
+
+To use the same Muse quotas as AI Limits on your phone, create `~/.openusage/limits-hub.json`:
+
+```json
+{
+  "snapshotURL": "https://your-hub.example:4401/snapshot.json",
+  "providers": ["muse"],
+  "resetTimeZone": "UTC"
+}
+```
+
+Use the same snapshot URL as the phone. `resetTimeZone` is the time zone of the hub's browser,
+not your Mac; it is only needed for reset labels that lack an ISO timestamp. If omitted, those
+reset times remain unknown. This hub runs its browser in UTC.
+
+Refresh OpenUsage after changing this file. Once enabled, Muse quotas come exclusively from the
+hub. Missing values remain unavailable, real zeroes remain zero, and hub failures show a warning
+while local spending and trends continue working. OpenUsage does not fall back to a second scrape.
+Data older than 30 minutes is unavailable until the hub collector updates it.
+
+Only Muse opts into this shared client today. Its HTTPS transport, provider selection, configuration,
+and freshness checks can be reused when adding other providers; adding a name alone does not migrate
+a provider. No Meta credentials or local logs are sent to the hub by OpenUsage.
+
+## Local dashboard access (when no hub is configured)
 
 OpenUsage reuses the browser session at `~/.config/muse/meta_session.json` that Meta Muse Bar
 created. It imports only unexpired `dev.meta.ai` cookies into a private, non-persistent WebKit
@@ -58,6 +83,7 @@ mirrored in the parent session's log, so counting both would double-count delega
 
 - **"Muse Code not detected"** — no credential and no session logs were found. Run
   `muse login` and complete at least one Muse session, then refresh.
+- **Shared hub warning** — check Tailscale and the hub collector. Renew the browser session on the hub if it reports `needs-session`. Local re-login does not update the hub.
 - **"Muse quota is unavailable"** — open Meta Muse Bar to renew its dashboard session, then
   refresh OpenUsage. Your locally scanned trend and spend rows remain available.
 - **"Couldn't read Muse Code's auth.json"** — the file exists but is unreadable. Check
