@@ -22,7 +22,7 @@ To use the same Muse quotas as AI Limits on your phone, create `~/.openusage/lim
 
 ```json
 {
-  "snapshotURL": "https://your-hub.example:4401/snapshot.json",
+  "snapshotURL": "https://your-hub.example:4477/snapshot.json",
   "providers": ["muse"],
   "resetTimeZone": "UTC"
 }
@@ -36,6 +36,9 @@ Refresh OpenUsage after changing this file. Once enabled, Muse quotas come exclu
 hub. Missing values remain unavailable, real zeroes remain zero, and hub failures show a warning
 while local spending and trends continue working. OpenUsage does not fall back to a second scrape.
 Data older than 30 minutes is unavailable until the hub collector updates it.
+
+The personal hubs formerly served on ports `4401` and `4410` now use `4477`. Existing configs for
+the four known development boxes migrate automatically; custom hosts and paths remain unchanged.
 
 Only Muse opts into this shared client today. Its HTTPS transport, provider selection, configuration,
 and freshness checks can be reused when adding other providers; adding a name alone does not migrate
