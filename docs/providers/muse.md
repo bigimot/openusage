@@ -50,6 +50,10 @@ OpenUsage reuses the browser session at `~/.config/muse/meta_session.json` that 
 created. It imports only unexpired `dev.meta.ai` cookies into a private, non-persistent WebKit
 view, opens `https://dev.meta.ai/usage`, and reads the rendered **Current usage** and **Weekly
 limit** values. Cookie values never appear in OpenUsage logs or leave WebKit's private session.
+The direct dashboard result is reused for 30 minutes inside the running app, and failed reads are
+not retried inside that interval. OpenUsage's five-minute refresh loop can therefore update local
+Muse logs without repeatedly scraping Meta. Relaunching the app starts a new direct-dashboard
+interval and performs one fresh read.
 
 This is an unofficial integration with Meta's private authenticated web dashboard, not a public
 or supported quota API. OpenUsage deliberately does not copy Meta's changing private GraphQL

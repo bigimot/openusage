@@ -22,6 +22,13 @@ final class MuseProvider: ProviderRuntime {
     private let hubConfiguration: @Sendable () throws -> SharedLimitsHubConfiguration?
     private let hubClient: SharedLimitsHubClient
     private let localUsage: @Sendable (Date, ModelPricing) async -> LogUsageScan?
+    /// Direct dashboard reads are much more automation-sensitive than the app's normal refresh loop.
+    /// Keep the last successful mapping in memory so the five-minute loop never scrapes Meta more
+    /// often than `QuotaSourceRefreshPolicy.interval`. A new app process still performs one fresh read.
+    private var cachedDashboardQuota: (lines: [MetricLine], fetchedAt: Date)?
+    /// Attempts are throttled too: after Meta rejects a scrape, do not turn the app's five-minute
+    /// provider loop into repeated browser traffic while the temporary block is trying to clear.
+    private var lastDashboardFetchAt: Date?
 
     /// Names the local source on hover. Dollars are estimated from Meta's published Muse Spark
     /// rates (not measured), so the estimate marker applies — unlike OpenCode's carried costs.
@@ -126,8 +133,9 @@ final class MuseProvider: ProviderRuntime {
                     try dashboardSessionStore.cookies()
                 }
                 dashboardSessionExists = true
-                let pageText = try await dashboardUsage(cookies)
-                quotaLines = try MuseUsageMapper.lines(from: pageText, now: refreshedAt)
+                let quota = try await dashboardQuota(cookies: cookies, now: refreshedAt)
+                quotaLines = quota.lines
+                quotaFetchedAt = quota.fetchedAt
                 if quotaLines.count != 2 { quotaWarning = Self.quotaUnavailableWarning }
             }
         } catch let error as SharedLimitsHubError {
@@ -203,6 +211,21 @@ final class MuseProvider: ProviderRuntime {
             warning: quotaWarning
         )
     }
+
+    private func dashboardQuota(
+        cookies: [MuseDashboardCookie], now: Date
+    ) async throws -> (lines: [MetricLine], fetchedAt: Date) {
+        if let lastDashboardFetchAt,
+           now.timeIntervalSince(lastDashboardFetchAt) < QuotaSourceRefreshPolicy.interval {
+            if let cachedDashboardQuota { return cachedDashboardQuota }
+            throw MuseDashboardUsageError.cooldown
+        }
+        lastDashboardFetchAt = now
+        let pageText = try await dashboardUsage(cookies)
+        let quota = (lines: try MuseUsageMapper.lines(from: pageText, now: now), fetchedAt: now)
+        cachedDashboardQuota = quota
+        return quota
+    }
 }
 
 private extension MuseDashboardSessionError {
@@ -221,6 +244,7 @@ private extension MuseDashboardUsageError {
         case .invalidCookie: "invalid-cookie"
         case .invalidPage: "invalid-page"
         case .timeout: "timeout"
+        case .cooldown: "cooldown"
         }
     }
 }

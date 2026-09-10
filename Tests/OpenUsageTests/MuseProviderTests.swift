@@ -59,6 +59,47 @@ final class MuseProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.warning, "Muse quota is unavailable. Sign in through Meta Muse Bar and refresh.")
     }
 
+    func testDirectDashboardFetchIsLimitedByCentralQuotaSourceInterval() async {
+        let clock = MuseTestClock(now)
+        let calls = MuseCallCounter()
+        let provider = makeProvider(clock: clock, dashboardCalls: calls)
+
+        let first = await provider.refresh()
+        clock.set(now.addingTimeInterval(5 * 60))
+        let cached = await provider.refresh()
+
+        XCTAssertEqual(calls.value, 1)
+        XCTAssertEqual(first.refreshedAt, now)
+        XCTAssertEqual(cached.refreshedAt, now)
+
+        clock.set(now.addingTimeInterval(QuotaSourceRefreshPolicy.interval))
+        let refreshed = await provider.refresh()
+
+        XCTAssertEqual(calls.value, 2)
+        XCTAssertEqual(refreshed.refreshedAt, now.addingTimeInterval(QuotaSourceRefreshPolicy.interval))
+    }
+
+    func testDirectDashboardFailureIsNotRetriedInsideQuotaSourceInterval() async {
+        let clock = MuseTestClock(now)
+        let calls = MuseCallCounter()
+        let provider = makeProvider(
+            dashboardError: .invalidPage,
+            clock: clock,
+            dashboardCalls: calls
+        )
+
+        _ = await provider.refresh()
+        clock.set(now.addingTimeInterval(5 * 60))
+        let throttled = await provider.refresh()
+
+        XCTAssertEqual(calls.value, 1)
+        XCTAssertEqual(throttled.warning, MuseProvider.quotaUnavailableWarning)
+
+        clock.set(now.addingTimeInterval(QuotaSourceRefreshPolicy.interval))
+        _ = await provider.refresh()
+        XCTAssertEqual(calls.value, 2)
+    }
+
     func testHubQuotasBypassDashboardAndPreserveLocalSpend() async {
         let http = FakeHTTPClient(response: HTTPResponse(statusCode: 200, headers: [:], body: Data("{\"providers\":{\"muse\":{\"status\":\"ok\",\"fetched_at\":\"\(ISO8601DateFormatter().string(from: now))\",\"session_percent\":0,\"weekly_percent\":37}}}".utf8)))
         let provider = makeProvider(localScan: localScan(), hubHTTP: http)
@@ -101,8 +142,11 @@ final class MuseProviderTests: XCTestCase {
         dashboardText: String? = nil,
         localScan: LogUsageScan? = nil,
         dashboardError: MuseDashboardUsageError? = nil,
-        hubHTTP: FakeHTTPClient? = nil
+        hubHTTP: FakeHTTPClient? = nil,
+        clock: MuseTestClock? = nil,
+        dashboardCalls: MuseCallCounter? = nil
     ) -> MuseProvider {
+        let currentDate: @Sendable () -> Date = { [now] in clock?.now ?? now }
         let home = URL(fileURLWithPath: "/tmp/openusage-tests")
         let sessionPath = home.appendingPathComponent(".config/muse/meta_session.json").path
         let sessionJSON = """
@@ -117,9 +161,10 @@ final class MuseProviderTests: XCTestCase {
             ),
             dashboardSessionStore: MuseDashboardSessionStore(
                 files: FakeFiles([sessionPath: sessionJSON]), environment: FakeEnvironment(),
-                now: { [now] in now }, homeDirectory: { home }
+                now: currentDate, homeDirectory: { home }
             ),
             dashboardUsage: { _ in
+                dashboardCalls?.increment()
                 if hubHTTP != nil { XCTFail("Configured hub must bypass the dashboard") }
                 if let dashboardError { throw dashboardError }
                 return dashboardText ?? "Current usage 8%\nWeekly limit 29%"
@@ -129,7 +174,7 @@ final class MuseProviderTests: XCTestCase {
             },
             hubClient: SharedLimitsHubClient(http: hubHTTP ?? FakeHTTPClient(response: HTTPResponse(statusCode: 500, headers: [:], body: Data()))),
             localUsage: { _, _ in localScan },
-            now: { [now] in now },
+            now: currentDate,
             pricing: { ModelPricing(supplement: PricingSupplement(), primary: PricingCatalog(entries: [:]), secondary: PricingCatalog(entries: [:])) }
         )
     }
@@ -143,5 +188,37 @@ final class MuseProviderTests: XCTestCase {
             model: "muse-spark-1.3"
         )
         return accumulator.build()
+    }
+}
+
+private final class MuseTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var date: Date
+
+    init(_ date: Date) { self.date = date }
+
+    var now: Date {
+        lock.lock(); defer { lock.unlock() }
+        return date
+    }
+
+    func set(_ date: Date) {
+        lock.lock(); defer { lock.unlock() }
+        self.date = date
+    }
+}
+
+private final class MuseCallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int {
+        lock.lock(); defer { lock.unlock() }
+        return count
+    }
+
+    func increment() {
+        lock.lock(); defer { lock.unlock() }
+        count += 1
     }
 }

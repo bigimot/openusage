@@ -55,7 +55,9 @@ enum SharedLimitsHubError: Error, LocalizedError, Equatable {
         case .invalidResponse: "Shared hub returned invalid usage data."
         case .missingProvider: "Shared hub has not published this provider yet."
         case .noData: "Some quota data is unavailable on the shared hub."
-        case .stale: "Shared hub quota data is over 30 minutes old. Check the hub collector."
+        case .stale:
+            "Shared hub quota data is over \(QuotaSourceRefreshPolicy.intervalMinutes) minutes old. "
+                + "Check the hub collector."
         case .http(let code): "Shared hub request failed (HTTP \(code))."
         case .providerStatus(let status): "Quota unavailable on the shared hub (\(status)). Check the hub collector."
         }
@@ -117,7 +119,9 @@ struct SharedLimitsHubClient: Sendable {
         }
         guard let fetchedAt = isoDate(provider["fetched_at"] as? String ?? root["updated_at"] as? String),
               fetchedAt.timeIntervalSince(now) < 300 else { throw SharedLimitsHubError.invalidResponse }
-        guard now.timeIntervalSince(fetchedAt) <= 30 * 60 else { throw SharedLimitsHubError.stale }
+        guard now.timeIntervalSince(fetchedAt) <= QuotaSourceRefreshPolicy.interval else {
+            throw SharedLimitsHubError.stale
+        }
         func percent(_ key: String) -> Double? {
             guard let value = ProviderParse.number(provider[key]), (0...100).contains(value) else { return nil }
             return value

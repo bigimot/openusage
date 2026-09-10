@@ -5,6 +5,7 @@ enum MuseDashboardUsageError: Error, LocalizedError, Equatable {
     case invalidCookie
     case invalidPage
     case timeout
+    case cooldown
 
     var errorDescription: String? {
         switch self {
@@ -14,6 +15,8 @@ enum MuseDashboardUsageError: Error, LocalizedError, Equatable {
             return "Meta's usage dashboard did not contain Muse quota data."
         case .timeout:
             return "Meta's usage dashboard did not finish loading."
+        case .cooldown:
+            return "Meta's usage dashboard is waiting for the next safe refresh."
         }
     }
 }

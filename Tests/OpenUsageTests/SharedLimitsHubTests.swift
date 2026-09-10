@@ -46,6 +46,27 @@ final class SharedLimitsHubTests: XCTestCase {
         }
     }
 
+    func testCentralQuotaSourceIntervalControlsHubStaleness() throws {
+        let formatter = ISO8601DateFormatter()
+        let boundary = formatter.string(from: now.addingTimeInterval(-QuotaSourceRefreshPolicy.interval))
+        XCTAssertNoThrow(
+            try SharedLimitsHubClient.decode(
+                payload(#""weekly_percent":37"#, fetchedAt: boundary), providerID: "muse", now: now
+            )
+        )
+
+        let tooOld = formatter.string(
+            from: now.addingTimeInterval(-QuotaSourceRefreshPolicy.interval - 1)
+        )
+        XCTAssertThrowsError(
+            try SharedLimitsHubClient.decode(
+                payload(#""weekly_percent":37"#, fetchedAt: tooOld), providerID: "muse", now: now
+            )
+        ) {
+            XCTAssertEqual($0 as? SharedLimitsHubError, .stale)
+        }
+    }
+
     func testHubResetTimesUseCollectorTimeZone() throws {
         let data = payload(#""session_percent":1,"weekly_percent":37,"session_reset":"2:41 AM","weekly_reset":"Sep 14 at 12:00 AM""#)
         let quota = try SharedLimitsHubClient.decode(data, providerID: "muse", now: now, resetTimeZone: "UTC")
