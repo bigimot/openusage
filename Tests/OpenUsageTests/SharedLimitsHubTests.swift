@@ -23,6 +23,16 @@ final class SharedLimitsHubTests: XCTestCase {
         XCTAssertEqual(zero.lines.count, 2)
     }
 
+    func testLiveMuseZeroSessionAndWeeklyUsageDecode() throws {
+        let quota = try SharedLimitsHubClient.decode(
+            payload(#""session_percent":0,"weekly_percent":38,"session_reset":null,"weekly_reset":"Sep 14 at 12:00 AM""#),
+            providerID: "muse", now: now, resetTimeZone: "UTC"
+        )
+        XCTAssertEqual(quota.sessionPercent, 0)
+        XCTAssertEqual(quota.weeklyPercent, 38)
+        XCTAssertEqual(quota.lines.map(\.label), ["Session", "Weekly"])
+    }
+
     func testRejectsStaleAndErrorPayloads() {
         for (data, expected) in [
             (payload(#""weekly_percent":37"#, fetchedAt: "2026-09-09T01:00:00Z"), SharedLimitsHubError.stale),
@@ -33,6 +43,27 @@ final class SharedLimitsHubTests: XCTestCase {
             XCTAssertThrowsError(try SharedLimitsHubClient.decode(data, providerID: "muse", now: now)) {
                 XCTAssertEqual($0 as? SharedLimitsHubError, expected)
             }
+        }
+    }
+
+    func testCentralQuotaSourceIntervalControlsHubStaleness() throws {
+        let formatter = ISO8601DateFormatter()
+        let boundary = formatter.string(from: now.addingTimeInterval(-QuotaSourceRefreshPolicy.interval))
+        XCTAssertNoThrow(
+            try SharedLimitsHubClient.decode(
+                payload(#""weekly_percent":37"#, fetchedAt: boundary), providerID: "muse", now: now
+            )
+        )
+
+        let tooOld = formatter.string(
+            from: now.addingTimeInterval(-QuotaSourceRefreshPolicy.interval - 1)
+        )
+        XCTAssertThrowsError(
+            try SharedLimitsHubClient.decode(
+                payload(#""weekly_percent":37"#, fetchedAt: tooOld), providerID: "muse", now: now
+            )
+        ) {
+            XCTAssertEqual($0 as? SharedLimitsHubError, .stale)
         }
     }
 
@@ -73,5 +104,33 @@ final class SharedLimitsHubTests: XCTestCase {
         XCTAssertNil(try SharedLimitsHubConfiguration.load(providerID: "claude", home: home))
         try Data("invalid".utf8).write(to: file)
         XCTAssertThrowsError(try SharedLimitsHubConfiguration.load(providerID: "muse", home: home))
+    }
+
+    func testConfigurationMigratesOnlyKnownLegacyHubEndpoints() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let folder = home.appendingPathComponent(".openusage")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let file = folder.appendingPathComponent("limits-hub.json")
+
+        for endpoint in [
+            "https://devbox-moshe.tailbfbe9a.ts.net:4401/snapshot.json",
+            "https://devbox-nir.tailbfbe9a.ts.net:4401/snapshot.json",
+            "https://devbox-joon.tailbfbe9a.ts.net:4401/snapshot.json",
+            "https://devbox-michael.tailbfbe9a.ts.net:4410/snapshot.json"
+        ] {
+            try Data(#"{"snapshotURL":"\#(endpoint)","providers":["muse"]}"#.utf8).write(to: file)
+            let config = try XCTUnwrap(SharedLimitsHubConfiguration.load(providerID: "muse", home: home))
+            XCTAssertEqual(config.snapshotURL.port, 4477)
+        }
+
+        for endpoint in [
+            "https://custom.example:4401/snapshot.json",
+            "https://devbox-moshe.tailbfbe9a.ts.net:4401/custom.json"
+        ] {
+            try Data(#"{"snapshotURL":"\#(endpoint)","providers":["muse"]}"#.utf8).write(to: file)
+            let config = try XCTUnwrap(SharedLimitsHubConfiguration.load(providerID: "muse", home: home))
+            XCTAssertEqual(config.snapshotURL.absoluteString, endpoint)
+        }
     }
 }

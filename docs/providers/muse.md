@@ -22,7 +22,7 @@ To use the same Muse quotas as AI Limits on your phone, create `~/.openusage/lim
 
 ```json
 {
-  "snapshotURL": "https://your-hub.example:4401/snapshot.json",
+  "snapshotURL": "https://your-hub.example:4477/snapshot.json",
   "providers": ["muse"],
   "resetTimeZone": "UTC"
 }
@@ -37,6 +37,9 @@ hub. Missing values remain unavailable, real zeroes remain zero, and hub failure
 while local spending and trends continue working. OpenUsage does not fall back to a second scrape.
 Data older than 30 minutes is unavailable until the hub collector updates it.
 
+The personal hubs formerly served on ports `4401` and `4410` now use `4477`. Existing configs for
+the four known development boxes migrate automatically; custom hosts and paths remain unchanged.
+
 Only Muse opts into this shared client today. Its HTTPS transport, provider selection, configuration,
 and freshness checks can be reused when adding other providers; adding a name alone does not migrate
 a provider. No Meta credentials or local logs are sent to the hub by OpenUsage.
@@ -47,6 +50,10 @@ OpenUsage reuses the browser session at `~/.config/muse/meta_session.json` that 
 created. It imports only unexpired `dev.meta.ai` cookies into a private, non-persistent WebKit
 view, opens `https://dev.meta.ai/usage`, and reads the rendered **Current usage** and **Weekly
 limit** values. Cookie values never appear in OpenUsage logs or leave WebKit's private session.
+The direct dashboard result is reused for 30 minutes inside the running app, and failed reads are
+not retried inside that interval. OpenUsage's five-minute refresh loop can therefore update local
+Muse logs without repeatedly scraping Meta. Relaunching the app starts a new direct-dashboard
+interval and performs one fresh read.
 
 This is an unofficial integration with Meta's private authenticated web dashboard, not a public
 or supported quota API. OpenUsage deliberately does not copy Meta's changing private GraphQL
